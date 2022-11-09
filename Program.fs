@@ -1,58 +1,65 @@
-﻿type IfExpr = { test: Expr; cons: Expr; alt: Expr }
+﻿type IfExpr = { test: Term; cons: Term; alt: Term }
 
-and Expr =
+and Term =
     | True
     | False
     | Zero
     | If of IfExpr
-    | Succ of Expr
-    | Pred of Expr
-    | IsZero of Expr
+    | Succ of Term
+    | Pred of Term
+    | IsZero of Term
 
-module Res =
-    type T =
-        | Bool of bool
-        | Int of int
+type Res =
+    | Bool of bool
+    | Int of int
 
-        member this.to_int =
-            match this with
-            | Bool true -> 1
-            | Bool false -> 0
-            | Int i -> i
-
-        member this.to_bool =
-            match this with
-            | Bool b -> b
-            | Int i -> i > 0
-
-        member this.to_str =
-            match this with
-            | Bool b -> string b
-            | Int i -> string i
-
-open Res
+exception TypeError of string
 
 let rec eval expr =
     match expr with
     | True -> Bool true
     | False -> Bool false
     | Zero -> Int 0
-    | Succ e -> Int((eval (e)).to_int + 1)
-    | Pred e -> Int((eval (e)).to_int - 1)
-    | If i ->
-        if (eval (i.test)).to_bool then
-            eval (i.cons)
-        else
-            eval (i.alt)
-    | IsZero e -> Bool((eval (e)).to_int = 0)
-
-printfn
-    "%s"
-    (eval (
-        If(
-            { test = IsZero(Zero)
-              cons = Zero
-              alt = Succ(Zero) }
+    | Succ e ->
+        Int(
+            match eval e with
+            | Bool _ -> raise (TypeError "Cannot success a bool value")
+            | Int i -> i + 1
         )
-    ))
-        .to_str
+    | Pred e ->
+        let res = eval e
+
+        Int(
+            match eval e with
+            | Bool _ -> raise (TypeError "Cannot predecess a bool value")
+            | Int 0 -> raise (TypeError "Cannot predecess 0")
+            | Int i -> i - 1
+        )
+    | If i ->
+        match eval i.test with
+        | Bool true -> eval i.cons
+        | Bool false -> eval i.alt
+        | Int _ -> raise (TypeError "Cannot use a int value in if")
+    | IsZero e ->
+        Bool(
+            match eval e with
+            | Bool _ -> raise (TypeError "Cannot compare a bool value with zero")
+            | Int 0 -> true
+            | Int i -> false
+        )
+
+try
+    let res =
+        eval (
+            If(
+                { test = IsZero(True)
+                  cons = Zero
+                  alt = Succ(Zero) }
+            )
+        )
+
+    match res with
+    | Bool b -> printfn "Bool: %b" b
+    | Int i -> printfn "Int: %i" i
+with TypeError(str) ->
+    printfn "Error: %s" str
