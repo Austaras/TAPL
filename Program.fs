@@ -32,7 +32,7 @@ let rec eval expr =
         Int(
             match eval e with
             | Bool _ -> raise (TypeError "Cannot predecess a bool value")
-            | Int 0 -> raise (TypeError "Cannot predecess 0")
+            | Int 0 -> 0
             | Int i -> i - 1
         )
     | If i ->
@@ -52,9 +52,9 @@ try
     let res =
         eval (
             If(
-                { test = IsZero(True)
+                { test = IsZero(Succ(Zero))
                   cons = Zero
-                  alt = Succ(Zero) }
+                  alt = Succ(Pred(Succ(Zero))) }
             )
         )
 
