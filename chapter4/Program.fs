@@ -1,4 +1,6 @@
-﻿type IfExpr = { test: Term; cons: Term; alt: Term }
+﻿// This is actually the big step version
+
+type IfExpr = { test: Term; cons: Term; alt: Term }
 
 and Term =
     | True
@@ -27,8 +29,6 @@ let rec eval expr =
             | Int i -> i + 1
         )
     | Pred e ->
-        let res = eval e
-
         Int(
             match eval e with
             | Bool _ -> raise (TypeError "Cannot predecess a bool value")
@@ -48,18 +48,20 @@ let rec eval expr =
             | Int i -> false
         )
 
-try
-    let res =
-        eval (
-            If(
-                { test = IsZero(Succ(Zero))
-                  cons = Zero
-                  alt = Succ(Pred(Succ(Zero))) }
-            )
-        )
+let print_res term =
+    try
+        match eval term with
+        | Bool b -> printfn "Bool: %b" b
+        | Int i -> printfn "Int: %i" i
+    with TypeError(str) ->
+        printfn "Error: %s" str
 
-    match res with
-    | Bool b -> printfn "Bool: %b" b
-    | Int i -> printfn "Int: %i" i
-with TypeError(str) ->
-    printfn "Error: %s" str
+print_res (
+    If(
+        { test = IsZero(Succ(Zero))
+          cons = Zero
+          alt = Succ(Pred(Succ(Zero))) }
+    )
+)
+
+print_res (IsZero(False))
