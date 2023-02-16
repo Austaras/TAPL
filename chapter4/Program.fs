@@ -1,4 +1,5 @@
-﻿// This is actually the big step version
+﻿// Arithmetic Expressions
+// This is actually the big step version
 
 type IfExpr = { test: Term; cons: Term; alt: Term }
 

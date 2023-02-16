@@ -24,14 +24,19 @@ let pickfreshname name ctx =
 let index2name v ctx =
     Array.get ctx (Array.length ctx - v - 1)
 
-
 let to_string ctx term =
     let rec to_string ctx term may_bracket =
         match term with
         | Apply a ->
-            if may_bracket then "(" else ""
+            let bracket =
+                may_bracket
+                && match a.callee with
+                   | Var _ -> true
+                   | _ -> false
+
+            if bracket then "(" else ""
             + $"{to_string ctx a.callee true} {to_string ctx a.arg true}"
-            + if may_bracket then ")" else ""
+            + if bracket then ")" else ""
         | Abs a ->
             let (new_ctx, name) = pickfreshname a.name ctx
 
@@ -56,43 +61,41 @@ let term =
 
 printfn "Input: %s" (to_string ctx term)
 
-type Shift = { d: int; c: int }
+let shift d term =
+    let rec shift_real c term =
+        match term with
+        | Apply a ->
+            Apply
+                { callee = shift_real c a.callee
+                  arg = shift_real c a.arg }
+        | Abs a ->
+            Abs
+                { name = a.name
+                  body = shift_real (c + 1) a.body }
+        | Var v -> Var(if v >= c then v + d else v)
 
-let rec shift s term =
-    match term with
-    | Apply a ->
-        Apply
-            { callee = shift s a.callee
-              arg = shift s a.arg }
-    | Abs a ->
-        Abs
-            { name = a.name
-              body = shift { d = s.d; c = s.c + 1 } a.body }
-    | Var v -> Var(if v >= s.c then v + s.d else v)
+    shift_real 0 term
 
-type Substitution = { j: int; s: Term }
+let substitute s term =
+    let rec sub_real j term =
+        match term with
+        | Apply a ->
+            Apply
+                { callee = sub_real j a.callee
+                  arg = sub_real j a.arg }
+        | Abs a ->
+            Abs
+                { name = a.name
+                  body = sub_real (j + 1) a.body }
+        | Var v -> if v = j then shift j s else Var(v)
 
-let rec substitute s term =
-    match term with
-    | Apply a ->
-        Apply
-            { callee = substitute s a.callee
-              arg = substitute s a.arg }
-    | Abs a ->
-        Abs
-            { name = a.name
-              body =
-                substitute
-                    { j = s.j + 1
-                      s = shift { d = 1; c = 0 } s.s }
-                    a.body }
-    | Var v -> if v = s.j then s.s else Var(v)
+    sub_real 0 term
 
 let eval_call body arg =
-    let arg = shift { d = 1; c = 0 } arg
-    let term = substitute { j = 0; s = arg } body
+    let arg = shift 1 arg
+    let term = substitute arg body
 
-    shift { d = -1; c = 0 } term
+    shift -1 term
 
 let rec eval term =
     match term with
