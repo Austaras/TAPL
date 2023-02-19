@@ -54,7 +54,7 @@ let print_res term =
         match eval term with
         | Bool b -> printfn "Bool: %b" b
         | Int i -> printfn "Int: %i" i
-    with TypeError(str) ->
+    with TypeError str ->
         printfn "Error: %s" str
 
 print_res (
