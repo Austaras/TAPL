@@ -398,8 +398,9 @@ let print_res type_ctx ctx term =
         let res = eval ctx term
 
         printfn "Result: %s" (to_string res)
-    with TypeError t ->
-        printfn "Type error: %s" t
+    with
+    | TypeError t -> printfn "Type error: %s" t
+    | RuntimeError t -> printfn "Runtime error: %s" t
 
 print_res [||] [||] (String "sadas")
 print_res [||] [||] (Proj((Record [| "x", Record [| "y", Float 1 |] |]), "x"))

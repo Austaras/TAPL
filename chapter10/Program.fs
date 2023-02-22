@@ -67,7 +67,7 @@ let rec typeof ctx t =
 let print_type ctx term =
     try
         (typeof ctx term) |> to_string |> printfn "Type: %s"
-    with TypeError(str) ->
+    with TypeError str ->
         printfn "Error: %s" str
 
 let ctx = [||]

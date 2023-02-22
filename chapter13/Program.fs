@@ -1,4 +1,4 @@
-﻿// STLC with Unit and reference
+﻿// STLC with reference
 
 let add ctx v = Array.append ctx [| v |]
 
@@ -275,8 +275,9 @@ let print_res ctx t =
         let res, store = eval ctx [||] t
 
         printfn "Result: %s" (to_string store res)
-    with TypeError t ->
-        printfn "Type error: %s" t
+    with
+    | TypeError t -> printfn "Type error: %s" t
+    | RuntimeError t -> printfn "Runtime error: %s" t
 
 print_res
     [||]
