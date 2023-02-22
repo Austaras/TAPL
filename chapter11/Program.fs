@@ -15,9 +15,14 @@ let add ctx v = Array.append ctx [| v |]
 let get ctx v =
     Array.get ctx (Array.length ctx - v - 1)
 
-let resolve ctx ty =
+let rec resolve ctx ty =
+    let map (name, t) = (name, resolve ctx t)
+
     match ty with
-    | Custom c -> get ctx c
+    | Custom c -> resolve ctx (get ctx c)
+    | Fn(t1, t2) -> Fn(resolve ctx t1, resolve ctx t2)
+    | TRecord t -> TRecord(Array.map map t)
+    | TVariant t -> TVariant(Array.map map t)
     | _ -> ty
 
 let rec equal ctx t1 t2 =
@@ -124,10 +129,10 @@ let rec typeof ctx term =
 
     | Var v -> get ctx v
     | Abs { type_ = type_; body = body } ->
-        let new_ctx = add ctx type_
+        let new_ctx = add ctx (resolve ctx type_)
         Fn(type_, typeof new_ctx body)
     | Apply { callee = callee; arg = arg } ->
-        let t_callee = typeof ctx callee
+        let t_callee = resolve ctx (typeof ctx callee)
         let t_arg = typeof ctx arg
 
         match t_callee with
@@ -253,8 +258,8 @@ let walk onvar term =
                   right = walk_real c right }
         | Let { body = body; value = value } ->
             Let
-                { body = walk_real c body
-                  value = walk_real (c + 1) value }
+                { body = walk_real (c + 1) body
+                  value = walk_real c value }
         | Apply a ->
             Apply
                 { callee = walk_real c a.callee
@@ -398,6 +403,16 @@ let print_res type_ctx ctx term =
 
 print_res [||] [||] (String "sadas")
 print_res [||] [||] (Proj((Record [| "x", Record [| "y", Float 1 |] |]), "x"))
+
+print_res
+    [| Fn(TUnit, TUnit) |]
+    [||]
+    (Apply
+        { callee =
+            Abs
+                { type_ = Custom 0
+                  body = Apply { callee = Var(0); arg = Unit } }
+          arg = Abs { type_ = TUnit; body = Var(0) } })
 
 print_res
     [||]
