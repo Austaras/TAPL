@@ -39,14 +39,6 @@ and Term =
     | Seq of Term * Term
     | Times of Term * Term
 
-let rec equal a b =
-    match a, b with
-    | Bool, Bool -> true
-    | Nat, Nat -> true
-    | Fn(a1, a2), Fn(b1, b2) -> equal a1 b1 && equal a2 b2
-    | TRef a, TRef b -> equal a b
-    | _ -> false
-
 exception TypeError of string
 
 let rec typeof ctx t =
@@ -65,11 +57,11 @@ let rec typeof ctx t =
         | Nat -> Bool
         | _ -> raise (TypeError "cannot iszero non number")
     | If { test = test; cons = cons; alt = alt } ->
-        if equal (typeof ctx test) Bool then
+        if typeof ctx test = Bool then
             let t_cons = typeof ctx cons
             let t_alt = typeof ctx alt
 
-            if equal t_cons t_alt then
+            if t_cons = t_alt then
                 t_cons
             else
                 raise (TypeError "arms of conditional have different types")
@@ -85,7 +77,7 @@ let rec typeof ctx t =
         let t_arg = typeof ctx arg
 
         match t_callee with
-        | Fn(t_param, body) when equal t_param t_arg -> body
+        | Fn(t_param, body) when t_param = t_arg -> body
         | Fn(_, _) -> raise (TypeError "parameter type mismatch")
         | _ -> raise (TypeError "callee not a function")
     | Let { value = value; body = body } ->
@@ -98,7 +90,7 @@ let rec typeof ctx t =
         | TRef tl ->
             let tr = typeof ctx right
 
-            if equal tl tr then
+            if tl = tr then
                 TUnit
             else
                 raise (TypeError "assign to wrong type of cell")

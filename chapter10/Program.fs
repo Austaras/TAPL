@@ -4,12 +4,6 @@ type Type =
     | Bool
     | Fn of Type * Type
 
-let rec equal t1 t2 =
-    match t1, t2 with
-    | Bool, Bool -> true
-    | Fn(param1, body1), Fn(param2, body2) -> (equal param1 param2) && (equal body1 body2)
-    | _ -> false
-
 let rec to_string t =
     match t with
     | Bool -> "Bool"
@@ -41,11 +35,11 @@ let rec typeof ctx t =
     | True
     | False -> Bool
     | If { test = test; cons = cons; alt = alt } ->
-        if equal (typeof ctx test) Bool then
+        if typeof ctx test = Bool then
             let t_cons = typeof ctx cons
             let t_alt = typeof ctx alt
 
-            if equal t_cons t_alt then
+            if t_cons = t_alt then
                 t_cons
             else
                 raise (TypeError "arms of conditional have different types")
@@ -60,7 +54,7 @@ let rec typeof ctx t =
         let t_arg = typeof ctx arg
 
         match t_callee with
-        | Fn(t_param, body) when equal t_param t_arg -> body
+        | Fn(t_param, body) when t_param = t_arg -> body
         | Fn(_, _) -> raise (TypeError "parameter type mismatch")
         | Bool -> raise (TypeError "callee not a function")
 
