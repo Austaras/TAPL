@@ -375,6 +375,7 @@ let rec eval ctx term =
         | _ -> raise (RuntimeError "guard of case not a variant")
 
     | Fix t ->
+        let t = eval ctx t |> to_term
         match t with
         | Abs a -> eval_call a.body (Fix t) |> eval ctx
         | _ -> raise (RuntimeError "should pass a function to fix")
