@@ -285,7 +285,7 @@ let rec eval ctx store term =
         | _ -> raise (RuntimeError "callee not a function")
 
     | If { test = test; cons = cons; alt = alt } ->
-        let test, (store: Res array) = eval ctx store test
+        let test, store = eval ctx store test
 
         match test with
         | RBool b -> eval ctx store (if b then cons else alt)
