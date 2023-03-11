@@ -22,7 +22,7 @@ let walk_ty onid ty =
         | TUnit -> ty
         | TRecord r -> TRecord(Array.map mapper r)
         | TVariant v -> TVariant(Array.map mapper v)
-        | TRecursive ty -> walk_ty_real (c + 1) ty
+        | TRecursive ty -> TRecursive(walk_ty_real (c + 1) ty)
         | TId i -> onid i c
         | Fn(arg, ret) -> Fn(walk_ty_real c arg, walk_ty_real c ret)
 
@@ -34,9 +34,9 @@ let shift_ty d =
 let substitute_ty s =
     walk_ty (fun v c -> if v = c then shift_ty c s else TId v)
 
-let remove_rec body arg =
-    let arg = shift_ty 1 arg
-    let term = substitute_ty arg body
+let unfold ty =
+    let arg = shift_ty 1 (TRecursive ty)
+    let term = substitute_ty arg ty
 
     shift_ty -1 term
 
@@ -44,11 +44,6 @@ let add ctx v = Array.append ctx [| v |]
 
 let get ctx v =
     Array.get ctx (Array.length ctx - v - 1)
-
-let rec resolve ctx ty =
-    match ty with
-    | TId i -> resolve ctx (get ctx i)
-    | _ -> ty
 
 type BinOp =
     | Add
@@ -135,7 +130,7 @@ let rec typeof ctx term =
 
     | Var v -> get ctx v
     | Abs { type_ = type_; body = body } ->
-        let new_ctx = add ctx (shift_ty 1 type_)
+        let new_ctx = add ctx type_
         Fn(type_, typeof new_ctx body)
     | Apply { callee = callee; arg = arg } ->
         let t_callee = typeof ctx callee
@@ -147,7 +142,7 @@ let rec typeof ctx term =
         | _ -> raise (TypeError "callee not a function")
 
     | Let { value = value; body = body } ->
-        let new_ctx = add ctx (shift_ty 1 (typeof ctx value))
+        let new_ctx = add ctx (typeof ctx value)
         typeof new_ctx body
 
     | Record r -> TRecord(Array.map (fun (name, term) -> (name, typeof ctx term)) r)
@@ -192,7 +187,7 @@ let rec typeof ctx term =
 
                     match Array.tryFind (fun (name, _) -> name = tag) variant with
                     | Some(_, type_) ->
-                        let new_ctx = add ctx (shift_ty 1 type_)
+                        let new_ctx = add ctx type_
                         let body_type = typeof new_ctx body
 
                         match state, body_type with
@@ -216,10 +211,10 @@ let rec typeof ctx term =
         | _ -> raise (TypeError "should pass a function to fix")
 
     | Fold(ty, term) ->
-        match resolve ctx ty with
+        match ty with
         | TRecursive t ->
             let real_ty = typeof ctx term
-            let unfold = remove_rec t (TId 0)
+            let unfold = unfold t
 
             if real_ty = unfold then
                 ty
@@ -230,8 +225,8 @@ let rec typeof ctx term =
         let real_ty = typeof ctx term
 
         if real_ty = ty then
-            match resolve ctx ty with
-            | TRecursive t -> remove_rec t (TId 0)
+            match ty with
+            | TRecursive t -> unfold t
             | _ -> raise (TypeError "can only unfold a recursive type")
         else
             raise (TypeError "unfold to an irrelevant type")
@@ -440,18 +435,20 @@ let print_res type_ctx ctx term =
     | TypeError t -> printfn "Type error: %s" t
     | RuntimeError t -> printfn "Runtime error: %s" t
 
-// type Tree = Nil | Node { left: Tree; right: Tree; value: Float }
-let tree_body =
+let t =
     TVariant(
         [| ("Nil", TUnit)
            ("Node", TRecord [| ("left", TId 0); ("right", TId 0); ("value", TFloat) |]) |]
     )
 
-let tree = TRecursive tree_body
+// type Tree = Nil | Node { left: Tree; right: Tree; value: Float }
+let tree = TRecursive t
+
+let tree_body = unfold t
 
 let nil =
     Fold(
-        TId 0,
+        tree,
         Tag
             { tag = "Nil"
               value = Unit
@@ -460,7 +457,7 @@ let nil =
 
 let node l r v =
     Fold(
-        TId 0,
+        tree,
         Tag
             { tag = "Node"
               value = Record [| ("left", l); ("right", r); ("value", v) |]
@@ -474,13 +471,13 @@ let test_tree =
 
 let sum =
     Abs
-        { type_ = Fn(TId 0, TFloat)
+        { type_ = Fn(tree, TFloat)
           body =
             Abs
-                { type_ = TId 1
+                { type_ = tree
                   body =
                     Case
-                        { test = Unfold(TId 2, Var 0)
+                        { test = Unfold(tree, Var 0)
                           branch =
                             [| { tag = "Nil"; body = Float 0 }
                                { tag = "Node"
@@ -500,4 +497,4 @@ let sum =
                                                  op = Add
                                                  right = Proj(Var 0, "value") } } } |] } } }
 
-print_res [| tree |] [||] (Apply { callee = Fix sum; arg = test_tree })
+print_res [||] [||] (Apply { callee = Fix sum; arg = test_tree })
