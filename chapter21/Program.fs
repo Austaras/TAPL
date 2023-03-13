@@ -1,34 +1,92 @@
-﻿// STLC with various useful extensions
+﻿// STLC with various extensions, equal recursive types and subtype
 
 type Type =
     | Bool
     | TString
     | TFloat
-    | Custom of int
     | TUnit
+    | TRecursive of Type
+    | TId of int
     | TRecord of (string * Type)[]
     | TVariant of (string * Type)[]
     | Fn of Type * Type
+
+let walk_ty onid ty =
+    let rec walk_ty_real c ty =
+        let mapper (name, ty) = (name, walk_ty_real c ty)
+
+        match ty with
+        | Bool
+        | TString
+        | TFloat
+        | TUnit -> ty
+        | TRecord r -> TRecord(Array.map mapper r)
+        | TVariant v -> TVariant(Array.map mapper v)
+        | TRecursive ty -> TRecursive(walk_ty_real (c + 1) ty)
+        | TId i -> onid i c
+        | Fn(arg, ret) -> Fn(walk_ty_real c arg, walk_ty_real c ret)
+
+    walk_ty_real 0 ty
+
+let shift_ty d =
+    walk_ty (fun v c -> TId(if v >= c then v + d else v))
+
+let substitute_ty s =
+    walk_ty (fun v c -> if v = c then shift_ty c s else TId v)
+
+let unfold ty =
+    let arg = shift_ty 1 (TRecursive ty)
+    let term = substitute_ty arg ty
+
+    shift_ty -1 term
 
 let add ctx v = Array.append ctx [| v |]
 
 let get ctx v =
     Array.get ctx (Array.length ctx - v - 1)
 
-let rec resolve ctx ty =
-    let map (name, t) = (name, resolve ctx t)
+let rec resolve ctx i =
+    match get ctx i with
+    | TId i -> resolve ctx i
+    | t -> t
 
-    match ty with
-    | Custom c -> resolve ctx (get ctx c)
-    | Fn(t1, t2) -> Fn(resolve ctx t1, resolve ctx t2)
-    | TRecord t -> TRecord(Array.map map t)
-    | TVariant t -> TVariant(Array.map map t)
-    | _ -> ty
+let rec simplify ctx t =
+    match t with
+    | TId i -> simplify ctx (get ctx i)
+    | TRecursive r -> unfold r
+    | _ -> t
 
-let rec equal ctx t1 t2 =
-    let t1 = resolve ctx t1
-    let t2 = resolve ctx t2
-    t1 = t2
+let rec equal_real seen ctx t1 t2 =
+    Set.contains (t1, t2) seen
+    || match t1, t2 with
+       | Bool, Bool
+       | TString, TString
+       | TFloat, TFloat
+       | TUnit, TUnit -> true
+       | TRecord t1, TRecord t2
+       | TVariant t1, TVariant t2 ->
+           let field_equal (name1, t1) (name2, t2) =
+               name1 = name2 && equal_real seen ctx t1 t2
+
+           Array.length t1 = Array.length t2 && Array.forall2 field_equal t1 t2
+
+       | Fn(param1, body1), Fn(param2, body2) -> equal_real seen ctx param1 param2 && equal_real seen ctx body1 body2
+       | TRecursive t, s ->
+           let seen = Set.add (TRecursive t, s) seen
+
+           equal_real seen ctx (unfold t) s
+       | s, TRecursive t ->
+           let seen = Set.add (s, TRecursive t) seen
+
+           equal_real seen ctx s (unfold t)
+       | TId i, t
+       | t, TId i ->
+           let i = resolve ctx i
+
+           equal_real seen ctx i t
+       | _ -> false
+
+let equal = equal_real Set.empty
 
 type BinOp =
     | Add
@@ -101,8 +159,8 @@ let rec typeof ctx term =
             raise (TypeError "guard of conditional not a boolean")
 
     | Bin { left = left; op = op; right = right } ->
-        let tleft = resolve ctx (typeof ctx left)
-        let tright = resolve ctx (typeof ctx right)
+        let tleft = simplify ctx (typeof ctx left)
+        let tright = simplify ctx (typeof ctx right)
 
         match tleft, op, tright with
         | TFloat, Equal, TFloat -> Bool
@@ -113,10 +171,10 @@ let rec typeof ctx term =
 
     | Var v -> get ctx v
     | Abs { type_ = type_; body = body } ->
-        let new_ctx = add ctx (resolve ctx type_)
+        let new_ctx = add ctx type_
         Fn(type_, typeof new_ctx body)
     | Apply { callee = callee; arg = arg } ->
-        let t_callee = resolve ctx (typeof ctx callee)
+        let t_callee = typeof ctx callee
         let t_arg = typeof ctx arg
 
         match t_callee with
@@ -141,8 +199,6 @@ let rec typeof ctx term =
     | Tag { tag = tag
             value = value
             type_ = type_ } ->
-        let type_ = resolve ctx type_
-
         match type_ with
         | TVariant t ->
             match Array.tryFind (fun (name, _) -> name = tag) t with
@@ -155,7 +211,7 @@ let rec typeof ctx term =
         | _ -> raise (TypeError "variant type expeced in tag")
 
     | Case { test = test; branch = branch } ->
-        let type_ = resolve ctx (typeof ctx test)
+        let type_ = simplify ctx (typeof ctx test)
 
         match type_ with
         | TVariant variant ->
@@ -188,7 +244,7 @@ let rec typeof ctx term =
         | _ -> raise (TypeError "guard of case not a variant")
 
     | Fix t ->
-        let t = resolve ctx (typeof ctx t)
+        let t = typeof ctx t
 
         match t with
         | Fn(arg, res) when equal ctx arg res -> arg
@@ -394,111 +450,61 @@ let print_res type_ctx ctx term =
     | TypeError t -> printfn "Type error: %s" t
     | RuntimeError t -> printfn "Runtime error: %s" t
 
-print_res [||] [||] (String "sadas")
-print_res [||] [||] (Proj((Record [| "x", Record [| "y", Float 1 |] |]), "x"))
+let t =
+    TVariant(
+        [| ("Nil", TUnit)
+           ("Node", TRecord [| ("left", TId 0); ("right", TId 0); ("value", TFloat) |]) |]
+    )
+// type Tree = Nil | Node { left: Tree; right: Tree; value: Float }
+let tree = TRecursive t
 
-print_res
-    [| Fn(TUnit, TUnit) |]
-    [||]
-    (Apply
-        { callee =
-            Abs
-                { type_ = Custom 0
-                  body = Apply { callee = Var(0); arg = Unit } }
-          arg = Abs { type_ = TUnit; body = Var(0) } })
+let tree_body = unfold t
 
-print_res
-    [||]
-    [||]
-    (Let
-        { value = Float 0.4
+let nil =
+    Tag
+        { tag = "Nil"
+          value = Unit
+          type_ = tree_body }
+
+
+let node l r v =
+    Tag
+        { tag = "Node"
+          value = Record [| ("left", l); ("right", r); ("value", v) |]
+          type_ = tree_body }
+
+
+let leaf = node nil nil
+
+let test_tree =
+    node (node (leaf (Float 4)) (leaf (Float 5)) (Float 2)) (leaf (Float 3)) (Float 1)
+
+let sum =
+    Abs
+        { type_ = Fn(tree, TFloat)
           body =
-            Apply
-                { callee =
-                    Abs
-                        { type_ = TFloat
-                          body =
-                            Bin
-                                { left = Var 0
-                                  op = Multiply
-                                  right = Var 1 } }
-                  arg = Var 0 } })
-
-print_res
-    [||]
-    [||]
-    (Apply
-        { callee =
             Abs
-                { type_ = TFloat
+                { type_ = tree
                   body =
-                    Let
-                        { value = Float 0.3
-                          body =
-                            Bin
-                                { left = Var 0
-                                  op = Add
-                                  right = Var 1 } } }
-          arg = Float 0.2 })
+                    Case
+                        { test = Var 0
+                          branch =
+                            [| { tag = "Nil"; body = Float 0 }
+                               { tag = "Node"
+                                 body =
+                                   Bin
+                                       { left =
+                                           Apply
+                                               { callee = Var 2
+                                                 arg = Proj(Var 0, "left") }
+                                         op = Add
+                                         right =
+                                           Bin
+                                               { left =
+                                                   Apply
+                                                       { callee = Var 2
+                                                         arg = Proj(Var 0, "right") }
+                                                 op = Add
+                                                 right = Proj(Var 0, "value") } } } |] } } }
 
-print_res
-    [||]
-    [||]
-    (Let
-        { value =
-            Tag
-                { tag = "Bool"
-                  value = True
-                  type_ = TVariant [| ("Number", TFloat); ("Bool", Bool) |] }
-          body =
-            Case
-                { test = Var 0
-                  branch =
-                    [| { tag = "Number"; body = Var 0 }
-                       { tag = "Bool"
-                         body =
-                           If
-                               { test = Var 0
-                                 cons = Float 15
-                                 alt = Float 10 } } |] } })
-
-// power
-print_res
-    [||]
-    [||]
-    (Apply
-        { callee =
-            Apply
-                { callee =
-                    Fix(
-                        Abs
-                            { type_ = Fn(TFloat, Fn(TFloat, TFloat))
-                              body =
-                                Abs
-                                    { type_ = TFloat
-                                      body =
-                                        Abs
-                                            { type_ = TFloat
-                                              body =
-                                                If
-                                                    { test =
-                                                        Bin
-                                                            { left = Var 0
-                                                              op = Equal
-                                                              right = Float 0 }
-                                                      cons = Float 1
-                                                      alt =
-                                                        Bin
-                                                            { left = Var 1
-                                                              op = Multiply
-                                                              right =
-                                                                Apply
-                                                                    { callee = Apply { callee = Var(2); arg = Var(1) }
-                                                                      arg =
-                                                                        Bin
-                                                                            { left = Var(0)
-                                                                              op = Minus
-                                                                              right = Float 1 } } } } } } }
-                    )
-                  arg = Float 5 }
-          arg = Float(5) })
+print_res [||] [||] (Apply { callee = Fix sum; arg = test_tree })

@@ -45,6 +45,17 @@ let add ctx v = Array.append ctx [| v |]
 let get ctx v =
     Array.get ctx (Array.length ctx - v - 1)
 
+let rec resolve ctx t =
+    match t with
+    | TId i -> resolve ctx (get ctx i)
+    | _ -> t
+
+let rec equal ctx t1 t2 =
+    match t1, t2 with
+    | TId _ as i, t
+    | t, (TId _ as i) -> equal ctx (resolve ctx i) t
+    | _ -> t1 = t2
+
 type BinOp =
     | Add
     | Minus
@@ -101,12 +112,12 @@ let rec typeof ctx term =
     | Float _ -> TFloat
     | Unit -> TUnit
     | As(term, ty) ->
-        if typeof ctx term = ty then
+        if equal ctx (typeof ctx term) ty then
             ty
         else
             raise (TypeError "Cast to incompatible type")
     | If { test = test; cons = cons; alt = alt } ->
-        if typeof ctx test = Bool then
+        if equal ctx (typeof ctx test) Bool then
             let t_cons = typeof ctx cons
             let t_alt = typeof ctx alt
 
@@ -118,8 +129,8 @@ let rec typeof ctx term =
             raise (TypeError "guard of conditional not a boolean")
 
     | Bin { left = left; op = op; right = right } ->
-        let tleft = typeof ctx left
-        let tright = typeof ctx right
+        let tleft = resolve ctx (typeof ctx left)
+        let tright = resolve ctx (typeof ctx right)
 
         match tleft, op, tright with
         | TFloat, Equal, TFloat -> Bool
@@ -137,7 +148,7 @@ let rec typeof ctx term =
         let t_arg = typeof ctx arg
 
         match t_callee with
-        | Fn(t_param, body) when t_param = t_arg -> body
+        | Fn(t_param, body) when equal ctx t_param t_arg -> body
         | Fn(_, _) -> raise (TypeError "parameter type mismatch")
         | _ -> raise (TypeError "callee not a function")
 
