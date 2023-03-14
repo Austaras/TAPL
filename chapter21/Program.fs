@@ -7,21 +7,21 @@ type Type =
     | TUnit
     | TRecursive of Type
     | TId of int
-    | TRecord of (string * Type)[]
-    | TVariant of (string * Type)[]
+    | TRecord of Map<string, Type>
+    | TVariant of Map<string, Type>
     | Fn of Type * Type
 
 let walk_ty onid ty =
     let rec walk_ty_real c ty =
-        let mapper (name, ty) = (name, walk_ty_real c ty)
+        let mapper _ ty = walk_ty_real c ty
 
         match ty with
         | Bool
         | TString
         | TFloat
         | TUnit -> ty
-        | TRecord r -> TRecord(Array.map mapper r)
-        | TVariant v -> TVariant(Array.map mapper v)
+        | TRecord r -> TRecord(Map.map mapper r)
+        | TVariant v -> TVariant(Map.map mapper v)
         | TRecursive ty -> TRecursive(walk_ty_real (c + 1) ty)
         | TId i -> onid i c
         | Fn(arg, ret) -> Fn(walk_ty_real c arg, walk_ty_real c ret)
@@ -56,37 +56,42 @@ let rec simplify ctx t =
     | TRecursive r -> unfold r
     | _ -> t
 
-let rec equal_real seen ctx t1 t2 =
+let rec sub_real seen ctx t1 t2 =
     Set.contains (t1, t2) seen
     || match t1, t2 with
        | Bool, Bool
        | TString, TString
        | TFloat, TFloat
-       | TUnit, TUnit -> true
+       | _, TUnit -> true
        | TRecord t1, TRecord t2
        | TVariant t1, TVariant t2 ->
-           let field_equal (name1, t1) (name2, t2) =
-               name1 = name2 && equal_real seen ctx t1 t2
+           let field_sub name t1 =
+               match Map.tryFind name t2 with
+               | Some t2 -> sub_real seen ctx t1 t2
+               | None -> false
 
-           Array.length t1 = Array.length t2 && Array.forall2 field_equal t1 t2
+           Map.count t1 <= Map.count t2 && Map.forall field_sub t1
 
-       | Fn(param1, body1), Fn(param2, body2) -> equal_real seen ctx param1 param2 && equal_real seen ctx body1 body2
+       | Fn(param1, body1), Fn(param2, body2) -> sub_real seen ctx param2 param1 && sub_real seen ctx body1 body2
        | TRecursive t, s ->
            let seen = Set.add (TRecursive t, s) seen
 
-           equal_real seen ctx (unfold t) s
+           sub_real seen ctx (unfold t) s
        | s, TRecursive t ->
            let seen = Set.add (s, TRecursive t) seen
 
-           equal_real seen ctx s (unfold t)
-       | TId i, t
+           sub_real seen ctx s (unfold t)
+       | TId i, t ->
+           let i = resolve ctx i
+
+           sub_real seen ctx i t
        | t, TId i ->
            let i = resolve ctx i
 
-           equal_real seen ctx i t
+           sub_real seen ctx t i
        | _ -> false
 
-let equal = equal_real Set.empty
+let sub = sub_real Set.empty
 
 type BinOp =
     | Add
@@ -126,7 +131,7 @@ and Term =
     | Var of int
     | Abs of Abs
     | Apply of Apply
-    | Record of (string * Term)[]
+    | Record of Map<string, Term>
     | Tag of Tag
     | Proj of Term * string // x.y or x.0
     | Case of Case
@@ -142,16 +147,16 @@ let rec typeof ctx term =
     | Float _ -> TFloat
     | Unit -> TUnit
     | As(term, ty) ->
-        if equal ctx (typeof ctx term) ty then
+        if sub ctx (typeof ctx term) ty then
             ty
         else
             raise (TypeError "Cast to incompatible type")
     | If { test = test; cons = cons; alt = alt } ->
-        if equal ctx (typeof ctx test) Bool then
+        if sub ctx (typeof ctx test) Bool then
             let t_cons = typeof ctx cons
             let t_alt = typeof ctx alt
 
-            if equal ctx t_cons t_alt then
+            if sub ctx t_cons t_alt then
                 t_cons
             else
                 raise (TypeError "arms of conditional have different types")
@@ -178,7 +183,7 @@ let rec typeof ctx term =
         let t_arg = typeof ctx arg
 
         match t_callee with
-        | Fn(t_param, body) when equal ctx t_param t_arg -> body
+        | Fn(t_param, body) when sub ctx t_param t_arg -> body
         | Fn(_, _) -> raise (TypeError "parameter type mismatch")
         | _ -> raise (TypeError "callee not a function")
 
@@ -186,13 +191,13 @@ let rec typeof ctx term =
         let new_ctx = add ctx (typeof ctx value)
         typeof new_ctx body
 
-    | Record r -> TRecord(Array.map (fun (name, term) -> (name, typeof ctx term)) r)
+    | Record r -> TRecord(Map.map (fun _ term -> typeof ctx term) r)
 
     | Proj(obj, key) ->
         match typeof ctx obj with
         | TRecord t ->
-            match Array.tryFind (fun (t, _) -> t = key) t with
-            | Some(_, ty) -> ty
+            match Map.tryFind key t with
+            | Some ty -> ty
             | None -> raise (TypeError $"ket {key} not found in proj")
         | _ -> raise (TypeError "proj object not a record")
 
@@ -201,9 +206,9 @@ let rec typeof ctx term =
             type_ = type_ } ->
         match type_ with
         | TVariant t ->
-            match Array.tryFind (fun (name, _) -> name = tag) t with
-            | Some(_, t) ->
-                if equal ctx t (typeof ctx value) then
+            match Map.tryFind tag t with
+            | Some t ->
+                if sub ctx t (typeof ctx value) then
                     type_
                 else
                     raise (TypeError "wrong type of value provided for tag")
@@ -215,7 +220,7 @@ let rec typeof ctx term =
 
         match type_ with
         | TVariant variant ->
-            if Array.length variant <> Array.length branch then
+            if Map.count variant <> Array.length branch then
                 raise (TypeError "incomplete cover of variant")
             else
                 let check (state, has) branch =
@@ -226,8 +231,8 @@ let rec typeof ctx term =
 
                     let has = Set.add tag has
 
-                    match Array.tryFind (fun (name, _) -> name = tag) variant with
-                    | Some(_, type_) ->
+                    match Map.tryFind tag variant with
+                    | Some type_ ->
                         let new_ctx = add ctx type_
                         let body_type = typeof new_ctx body
 
@@ -247,7 +252,7 @@ let rec typeof ctx term =
         let t = typeof ctx t
 
         match t with
-        | Fn(arg, res) when equal ctx arg res -> arg
+        | Fn(arg, res) when sub ctx arg res -> arg
         | Fn _ -> raise (TypeError "should pass a recusive function")
         | _ -> raise (TypeError "should pass a function to fix")
 
@@ -261,7 +266,7 @@ and Res =
     | RString of string
     | RFloat of float
     | RUnit
-    | RRecord of (string * Res)[]
+    | RRecord of Map<string, Res>
     | RAbs of Abs
     | RTag of Rtag
 
@@ -272,7 +277,7 @@ let rec to_term r =
     | RString s -> String s
     | RFloat f -> Float f
     | RUnit -> Unit
-    | RRecord r -> Record(Array.map (fun (name, r) -> name, to_term r) r)
+    | RRecord r -> Record(Map.map (fun _ r -> to_term r) r)
     | RAbs a -> Abs a
     | RTag { tag = tag
              value = value
@@ -314,7 +319,7 @@ let walk onvar term =
                 { type_ = a.type_
                   body = walk_real (c + 1) a.body }
         | Var v -> onvar v c
-        | Record r -> Record(Array.map (fun (key, value) -> (key, walk_real c value)) r)
+        | Record r -> Record(Map.map (fun _ value -> walk_real c value) r)
         | Proj(obj, key) -> Proj(walk_real c obj, key)
         | Tag t ->
             Tag
@@ -393,7 +398,7 @@ let rec eval ctx term =
             | Equal -> RBool(lf = rf)
         | _ -> raise (RuntimeError "invalid type for binary experssion")
 
-    | Record r -> RRecord(Array.map (fun (name, term) -> (name, eval ctx term)) r)
+    | Record r -> RRecord(Map.map (fun _ term -> eval ctx term) r)
     | Tag t ->
         RTag
             { tag = t.tag
@@ -402,8 +407,8 @@ let rec eval ctx term =
     | Proj(obj, key) ->
         match eval ctx obj with
         | RRecord t ->
-            match Array.tryFind (fun (t, _) -> t = key) t with
-            | Some(_, r) -> r
+            match Map.tryFind key t with
+            | Some r -> r
             | None -> raise (RuntimeError $"ket {key} not found in proj")
         | _ -> raise (RuntimeError "proj object not a record")
     | Case { test = test; branch = branch } ->
@@ -432,7 +437,7 @@ let rec to_string res =
     | RBool false -> "false"
     | RFloat f -> string f
     | RRecord r ->
-        Array.fold (fun state (name, res) -> state + $" {name}: {to_string res}\n") "{\n" r
+        Map.fold (fun state name res -> state + $" {name}: {to_string res}\n") "{\n" r
         + "}"
     | RAbs _ -> "FUNCTION"
     | RTag t ->
@@ -452,8 +457,9 @@ let print_res type_ctx ctx term =
 
 let t =
     TVariant(
-        [| ("Nil", TUnit)
-           ("Node", TRecord [| ("left", TId 0); ("right", TId 0); ("value", TFloat) |]) |]
+        Map
+            [| ("Nil", TUnit)
+               ("Node", TRecord(Map [| ("left", TId 0); ("right", TId 0); ("value", TFloat) |])) |]
     )
 // type Tree = Nil | Node { left: Tree; right: Tree; value: Float }
 let tree = TRecursive t
@@ -470,7 +476,7 @@ let nil =
 let node l r v =
     Tag
         { tag = "Node"
-          value = Record [| ("left", l); ("right", r); ("value", v) |]
+          value = Record(Map [| ("left", l); ("right", r); ("value", v) |])
           type_ = tree_body }
 
 
