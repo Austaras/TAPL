@@ -1,4 +1,5 @@
 ﻿// STLC with subtype
+// λ<:
 
 type Type =
     | Top

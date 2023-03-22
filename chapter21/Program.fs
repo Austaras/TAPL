@@ -1,4 +1,5 @@
 ﻿// STLC with various extensions, equal recursive types and subtype
+// λµ
 
 type Type =
     | Bool
@@ -472,13 +473,11 @@ let nil =
           value = Unit
           type_ = tree_body }
 
-
 let node l r v =
     Tag
         { tag = "Node"
           value = Record(Map [| ("left", l); ("right", r); ("value", v) |])
           type_ = tree_body }
-
 
 let leaf = node nil nil
 
