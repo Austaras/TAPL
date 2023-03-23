@@ -15,6 +15,12 @@ type Type =
         | THole i -> $"Hole {i}"
         | TFn(arg, ret) -> $"{arg.to_string} -> {ret.to_string}"
 
+    member this.has_hole =
+        match this with
+        | THole _ -> true
+        | TFn(arg, ret) -> arg.has_hole || ret.has_hole
+        | _ -> false
+
 exception TypeError of string
 
 let rec replace_ty hole new_t ty =
@@ -45,7 +51,12 @@ and Term =
     | Abs of Option<Type> * Term
     | Apply of Term * Term
     | Let of Term * Term
+    | LetRec of Term * Term
+    | Fix of Term
     | If of If
+
+let rec_to_fix value body =
+    Let(Abs(None, value), Let(Fix(Var 0), body))
 
 let walk onvar term =
     let rec walk_real c term =
@@ -65,7 +76,9 @@ let walk onvar term =
                   then_ = walk_real c then_
                   else_ = walk_real c else_ }
 
-        | Let(value, body) -> Let(walk_real (c + 1) body, walk_real c value)
+        | Let(value, body) -> Let(walk_real c value, walk_real (c + 1) body)
+        | LetRec(value, body) -> LetRec(walk_real (c + 1) value, walk_real (c + 1) body)
+        | Fix t -> Fix(walk_real c t)
         | Apply(callee, arg) -> Apply(walk_real c callee, walk_real c arg)
         | Abs(ty, body) -> Abs(ty, walk_real (c + 1) body)
         | Var v -> onvar v c
@@ -129,9 +142,9 @@ let rec get_constraint fresh ctx term =
 
         ty2, cons, fresh
 
-    // let polymorphism
     | Let(value, body) ->
         match value with
+        // let polymorphism
         | Abs(_, _) as abs -> get_constraint fresh ctx (eval_call body abs)
         | _ ->
             let value, cons1, fresh = get_constraint fresh ctx value
@@ -139,6 +152,14 @@ let rec get_constraint fresh ctx term =
             let body, cons2, fresh = get_constraint fresh new_ctx body
 
             body, cons1 @ cons2, fresh + 1
+
+    | LetRec(value, body) -> get_constraint fresh ctx (rec_to_fix value body)
+
+    | Fix t ->
+        let t, cons, fresh = get_constraint fresh ctx t
+        let cons = (t, TFn(THole fresh, THole fresh)) :: cons
+
+        THole fresh, cons, fresh + 1
 
 let rec unify cons =
     match cons with
@@ -164,7 +185,10 @@ let typeof fresh term =
     let cons = unify cons
     let ty = apply cons ty
 
-    ty
+    if ty.has_hole then
+        raise (TypeError "not enough information for type")
+    else
+        ty
 
 type Res =
     | RUnit
@@ -227,6 +251,16 @@ let rec eval_real ctx term =
 
     | Let(value, body) -> eval_call body (eval_real ctx value).to_term |> eval_real ctx
 
+    | LetRec(value, body) -> eval_real ctx (rec_to_fix value body)
+
+    | Fix t ->
+        let t = (eval_real ctx t).to_term
+
+        match t with
+        | Abs(_, body) -> eval_call body (Fix t) |> eval_real ctx
+        | _ -> raise (RuntimeError "should pass a function to fix")
+
+
 let eval = eval_real [||]
 
 let print_res fresh term =
@@ -255,3 +289,19 @@ print_res 0 (Let(True, Var 0))
 print_res 0 (Let(Abs(None, Var 0), Apply(Apply(Var 0, Var 0), Apply(Var 0, Succ Zero))))
 
 print_res 0 (Let(Abs(None, Succ Zero), Apply(Var 0, Apply(Var 0, Var 0))))
+
+print_res
+    0
+    (LetRec(
+        Abs(
+            None,
+            Abs(
+                None,
+                If
+                    { cond = IsZero(Var 0)
+                      then_ = Var 1
+                      else_ = Apply(Apply(Var 2, Succ(Var 1)), Pred(Var 0)) }
+            )
+        ),
+        Apply(Apply(Var 0, Succ(Succ(Succ(Succ Zero)))), Succ(Succ(Succ Zero)))
+    ))
