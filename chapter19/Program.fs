@@ -1,5 +1,6 @@
 ﻿// chapter 18 but with native class
 // all classes are pre defined and nested classes are prohibited
+// similar to featherweight java
 
 type Type =
     | Bottom
@@ -210,8 +211,6 @@ let typeof_class ctx classes =
             let real_type = typeof ctx klass.name state m.body
 
             if not ((<+) state real_type m.return_t) then
-                printfn "%s %s %s" klass.name (string state) (string m.body)
-                printfn "%s %s" (string real_type) (string m.return_t)
                 raise (TypeError "return type of method mismatch")
 
             match Map.tryFind name super.method with

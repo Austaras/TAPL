@@ -215,59 +215,59 @@ type Res =
 
 exception RuntimeError of string
 
-let rec eval_real ctx term =
-    match term with
-    | Unit -> RUnit
-    | True -> RBool true
-    | False -> RBool false
-    | Zero -> RNat 0
-    | Succ s ->
-        match eval_real ctx s with
-        | RNat n -> RNat(n + 1)
-        | _ -> raise (RuntimeError "cannot succ non number")
-    | Pred p ->
-        match eval_real ctx p with
-        | RNat 0 -> RNat 0
-        | RNat n -> RNat(n - 1)
-        | _ -> raise (RuntimeError "cannot pred non number")
-    | IsZero n ->
-        match eval_real ctx n with
-        | RNat 0 -> RBool true
-        | RNat _ -> RBool false
-        | _ -> raise (TypeError "cannot iszero non number")
-    | If { cond = cond
-           then_ = then_
-           else_ = else_ } ->
-        match eval_real ctx cond with
-        | RBool b -> eval_real ctx (if b then then_ else else_)
-        | _ -> raise (RuntimeError "guard of conditional not a boolean")
+let eval ctx term =
+    let rec eval_real term =
+        match term with
+        | Unit -> RUnit
+        | True -> RBool true
+        | False -> RBool false
+        | Zero -> RNat 0
+        | Succ s ->
+            match eval_real s with
+            | RNat n -> RNat(n + 1)
+            | _ -> raise (RuntimeError "cannot succ non number")
+        | Pred p ->
+            match eval_real p with
+            | RNat 0 -> RNat 0
+            | RNat n -> RNat(n - 1)
+            | _ -> raise (RuntimeError "cannot pred non number")
+        | IsZero n ->
+            match eval_real n with
+            | RNat 0 -> RBool true
+            | RNat _ -> RBool false
+            | _ -> raise (TypeError "cannot iszero non number")
+        | If { cond = cond
+               then_ = then_
+               else_ = else_ } ->
+            match eval_real cond with
+            | RBool b -> eval_real (if b then then_ else else_)
+            | _ -> raise (RuntimeError "guard of conditional not a boolean")
 
-    | Var v -> get ctx v
-    | Abs(_, fn) -> RFn fn
-    | Apply(callee, arg) ->
-        match eval_real ctx callee with
-        | RFn f -> eval_call f (eval_real ctx arg).to_term |> eval_real ctx
-        | _ -> raise (RuntimeError "callee not a function")
+        | Var v -> get ctx v
+        | Abs(_, fn) -> RFn fn
+        | Apply(callee, arg) ->
+            match eval_real callee with
+            | RFn f -> eval_call f (eval_real arg).to_term |> eval_real
+            | _ -> raise (RuntimeError "callee not a function")
 
-    | Let(value, body) -> eval_call body (eval_real ctx value).to_term |> eval_real ctx
+        | Let(value, body) -> eval_call body (eval_real value).to_term |> eval_real
 
-    | LetRec(value, body) -> eval_real ctx (rec_to_fix value body)
+        | LetRec(value, body) -> eval_real (rec_to_fix value body)
 
-    | Fix t ->
-        let t = (eval_real ctx t).to_term
+        | Fix t ->
+            let t = (eval_real t).to_term
 
-        match t with
-        | Abs(_, body) -> eval_call body (Fix t) |> eval_real ctx
-        | _ -> raise (RuntimeError "should pass a function to fix")
+            match t with
+            | Abs(_, body) -> eval_call body (Fix t) |> eval_real
+            | _ -> raise (RuntimeError "should pass a function to fix")
 
-
-let eval = eval_real [||]
+    eval_real term
 
 let print_res fresh term =
     try
         let ty = typeof fresh term
         printfn "Type: %s" ty.to_string
-        let res = eval term
+        let res = eval [||] term
 
         printfn "Result: %s" res.to_string
     with

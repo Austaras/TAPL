@@ -232,9 +232,7 @@ let rec eval ctx store t =
             let value, store = eval ctx store right
             Array.set store l value
             RUnit, store
-        | a ->
-            printfn "%s %s" (string a) (string right)
-            raise (RuntimeError "assign to a non ref value")
+        | _ -> raise (RuntimeError "assign to a non ref value")
     | Deref t ->
         match eval ctx store t with
         | RRef l, store -> Array.get store l, store
