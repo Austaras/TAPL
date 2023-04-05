@@ -1,4 +1,5 @@
 ﻿// Bounded Quantification with references
+// system F<:
 
 let get ctx v =
     Array.get ctx (Array.length ctx - v - 1)
@@ -25,9 +26,6 @@ type Type =
     | TApp of Type * Type
     | TFn of Type * Type
     | TRecord of Map<string, Type>
-    | TRef of Type
-    | TSource of Type
-    | TSink of Type
 
     member this.to_string =
         let rec to_string ctx ty =
@@ -63,9 +61,6 @@ type Type =
 
                 "{\n" + Map.fold formatter "" r + "}"
             | TApp _ -> failwith "unreachable"
-            | TRef t -> $"&{to_string ctx t}"
-            | TSource t -> $"->{to_string ctx t}"
-            | TSink t -> $"<-{to_string ctx t}"
 
         to_string [||] this
 
@@ -81,9 +76,6 @@ let walk_ty onvar c ty =
         | TSome(bound, t) -> TSome(walk_real c bound, walk_real (c + 1) t)
         | TVar t -> onvar t c
         | TRecord t -> TRecord(Map.map (fun _ ty -> walk_real c ty) t)
-        | TRef t -> TRef(walk_real c t)
-        | TSource t -> TSource(walk_real c t)
-        | TSink t -> TSink(walk_real c t)
         | TApp(t1, t2) -> TApp(walk_real c t1, walk_real c t2)
 
     walk_real c ty
@@ -125,10 +117,6 @@ let rec (<+) tyctx a b =
     | TAll(b1, t1), TAll(b2, t2) -> (<+) tyctx b2 b1 && (<+) tyctx (eval_ty t1 b1) (eval_ty t2 b2)
     // same as above
     | TSome(b1, t1), TSome(b2, t2) -> (<+) tyctx b1 b2 && (<+) tyctx (eval_ty t1 b1) (eval_ty t2 b2)
-    | TSource a, TSource b -> (<+) tyctx a b
-    | TSink a, TSink b -> (<+) tyctx b a
-    | TRef a, TSource b -> (<+) tyctx a b
-    | TRef a, TSink b -> (<+) tyctx a b
     | _, _ -> false
 
 // join
@@ -217,14 +205,6 @@ and Term =
     | Unpack of Term * Term
     | Record of Map<string, Term>
     | Proj of Term * string
-    | As of Term * Type
-    | Let of Term * Term
-    | Block of Term[]
-    | Error
-    | Ref of Term
-    | Deref of Term
-    | Assign of Term * Term
-    | Label of int
 
 let rec typeof_real ctx tyctx term =
     match term with
@@ -232,7 +212,6 @@ let rec typeof_real ctx tyctx term =
     | False -> TBool
     | Unit -> TTop
     | Zero -> TNat
-    | Error -> TBottom
     | Succ n
     | Pred n ->
         match typeof_real ctx tyctx n with
@@ -255,20 +234,6 @@ let rec typeof_real ctx tyctx term =
         | TFn(t_param, body) when (<+) tyctx t_arg t_param -> if t_arg = TBottom then TBottom else body
         | TFn _ -> raise (TypeError "parameter type mismatch")
         | _ -> raise (TypeError "callee not a function")
-    | As(value, ty) ->
-        let real_ty = typeof_real ctx tyctx value
-
-        if (<+) tyctx real_ty ty || (<+) tyctx ty real_ty then
-            ty
-        else
-            raise (TypeError "cast to irrelevant type")
-    | Let(value, body) ->
-        let new_ctx = add ctx (simplify_ty tyctx (typeof_real ctx tyctx value))
-        typeof_real new_ctx tyctx body
-    | Block b ->
-        let checker _ stmt = typeof_real ctx tyctx stmt
-
-        Array.fold checker TTop b
     | If { cond = test
            then_ = cons
            else_ = alt } ->
@@ -322,25 +287,6 @@ let rec typeof_real ctx tyctx term =
             | None -> raise (TypeError $"key {key} not found in proj")
         | _ -> raise (TypeError "proj object not a record")
 
-    | Ref t -> TRef(typeof_real ctx tyctx t)
-    | Assign(left, right) ->
-        match typeof_real ctx tyctx left with
-        | TRef tl
-        | TSink tl ->
-            let tr = typeof_real ctx tyctx right
-
-            if tl = tr then
-                TTop
-            else
-                raise (TypeError "assign to wrong type of cell")
-        | _ -> raise (TypeError "assign to a non ref type")
-    | Deref t ->
-        match typeof_real ctx tyctx t with
-        | TRef t
-        | TSource t -> t
-        | _ -> raise (TypeError "dereference to a non ref type")
-    | Label _ -> raise (TypeError "ref label should not be in user input")
-
 let typeof = typeof_real [||] [||]
 
 exception RuntimeError of string
@@ -350,18 +296,15 @@ type RPack = { ty: Type; value: Res; as_: Type }
 and Res =
     | RBool of bool
     | RUnit
-    | RError
     | RInt of int
     | RAll of Type * Term
     | RSome of RPack
     | RRecord of Map<string, Res>
     | RFn of Type * Term
-    | RRef of int
 
-    member this.to_string(store: Res[]) =
+    member this.to_string =
         match this with
         | RUnit -> "()"
-        | RError -> "error"
         | RBool true -> "true"
         | RBool false -> "false"
         | RInt n -> string n
@@ -371,14 +314,12 @@ and Res =
             Map.fold (fun state name (r: Res) -> state + $" {name}: {r.to_string}\n") "{\n" r
             + "}"
         | RFn _ -> "FUNCTION"
-        | RRef i -> $"&{(Array.get store i).to_string store}"
 
     member this.to_term =
         match this with
         | RBool true -> True
         | RBool false -> False
         | RUnit -> Unit
-        | RError -> Error
         | RInt 0 -> Zero
         | RInt n -> Succ (RInt(n - 1)).to_term
         | RAll(bound, r) -> TyAbs(bound, r)
@@ -389,7 +330,6 @@ and Res =
                   as_ = p.as_ }
         | RFn(ty, body) -> Abs(ty, body)
         | RRecord r -> Record(Map.map (fun _ (r: Res) -> r.to_term) r)
-        | RRef i -> Label i
 
 let walk onvar term =
     let rec walk_real c term =
@@ -397,9 +337,7 @@ let walk onvar term =
         | True
         | False
         | Unit
-        | Zero
-        | Error
-        | Label _ -> term
+        | Zero -> term
         | Succ t -> Succ(walk_real c t)
         | Pred t -> Pred(walk_real c t)
         | IsZero t -> IsZero(walk_real c t)
@@ -412,9 +350,6 @@ let walk onvar term =
                   else_ = walk_real c alt }
         | App(callee, arg) -> App(walk_real c callee, walk_real c arg)
         | Abs(ty, body) -> Abs(ty, walk_real (c + 1) body)
-        | As(value, ty) -> As(walk_real c value, ty)
-        | Let(value, body) -> Let(walk_real c value, walk_real (c + 1) body)
-        | Block(b) -> Block(Array.map (walk_real c) b)
         | Var v -> onvar v c
         | TyAbs(bound, t) -> TyAbs(bound, walk_real c t)
         | TyApp(term, ty) -> TyApp(walk_real c term, ty)
@@ -426,10 +361,6 @@ let walk onvar term =
         | Unpack(value, body) -> Unpack(walk_real c value, walk_real (c + 1) body)
         | Record r -> Record(Map.map (fun _ term -> walk_real c term) r)
         | Proj(obj, key) -> Proj(walk_real c obj, key)
-
-        | Ref t -> Ref(walk_real c t)
-        | Assign(left, right) -> Assign(walk_real c left, walk_real c right)
-        | Deref t -> Deref(walk_real c t)
 
     walk_real 0 term
 
@@ -452,9 +383,7 @@ let walk_tmty ontype term =
         | True
         | False
         | Zero
-        | Error
-        | Var _
-        | Label _ -> term
+        | Var _ -> term
         | Succ t -> Succ(walk_real c t)
         | Pred t -> Pred(walk_real c t)
         | IsZero t -> IsZero(walk_real c t)
@@ -465,9 +394,6 @@ let walk_tmty ontype term =
                   else_ = walk_real c t.else_ }
         | App(callee, arg) -> App(walk_real c callee, walk_real c arg)
         | Abs(ty, body) -> Abs(ontype ty c, walk_real c body)
-        | As(value, ty) -> As(walk_real c value, ontype ty c)
-        | Let(value, body) -> Let(walk_real c value, walk_real c body)
-        | Block b -> Block(Array.map (walk_real c) b)
 
         | TyAbs(bound, t) -> TyAbs(ontype bound c, walk_real (c + 1) t)
         | TyApp(term, ty) -> TyApp(walk_real c term, ty)
@@ -479,10 +405,6 @@ let walk_tmty ontype term =
         | Unpack(value, body) -> Unpack(walk_real c value, walk_real (c + 1) body)
         | Record r -> Record(Map.map (fun _ term -> walk_real c term) r)
         | Proj(obj, key) -> Proj(walk_real c obj, key)
-
-        | Ref t -> Ref(walk_real c t)
-        | Assign(left, right) -> Assign(walk_real c left, walk_real c right)
-        | Deref t -> Deref(walk_real c t)
 
     walk_real 0 term
 
@@ -498,246 +420,194 @@ let eval_ty_call arg body =
     shift_tmty -1 term
 
 let eval ctx term =
-    let rec eval_real store term =
+    let rec eval_real term =
         match term with
-        | Unit -> RUnit, store
-        | True -> RBool true, store
-        | False -> RBool false, store
-        | Zero -> RInt 0, store
-        | Error -> RError, store
+        | Unit -> RUnit
+        | True -> RBool true
+        | False -> RBool false
+        | Zero -> RInt 0
         | Succ n ->
-            let n, store = eval_real store n
-
-            match n with
-            | RInt n -> RInt(n + 1), store
-            | RError -> RError, store
+            match eval_real n with
+            | RInt n -> RInt(n + 1)
             | _ -> raise (RuntimeError "cannot succ a non number")
         | Pred n ->
-            let n, store = eval_real store n
-
-            match n with
-            | RInt 0 -> RInt 0, store
-            | RInt n -> RInt(n - 1), store
-            | RError -> RError, store
+            match eval_real n with
+            | RInt 0 -> RInt 0
+            | RInt n -> RInt(n - 1)
             | _ -> raise (RuntimeError "cannot pred a non number")
         | IsZero n ->
-            let n, store = eval_real store n
-
-            match n with
-            | RInt 0 -> RBool true, store
-            | RInt _ -> RBool false, store
-            | RError -> RError, store
+            match eval_real n with
+            | RInt 0 -> RBool true
+            | RInt _ -> RBool false
             | _ -> raise (RuntimeError "cannot pred a non number")
 
         | Var v -> get ctx v
-        | Abs(ty, body) -> RFn(ty, body), store
+        | Abs(ty, body) -> RFn(ty, body)
         | App(callee, arg) ->
-            let callee, store = eval_real store callee
-
-            match callee with
+            match eval_real callee with
             | RFn(_, body) ->
-                let arg, store = eval_real store arg
-
-                match arg with
-                | RError -> RError, store
-                | _ -> eval_call body arg.to_term |> eval_real store
-            | RError -> RError, store
+                let arg = eval_real arg
+                eval_call body arg.to_term |> eval_real
             | _ -> raise (RuntimeError "callee not a function")
-
-        | As(value, ty) -> 
-            let value, store = eval_real store value
-
-            let real_ty = typeof value.to_term
-
-            if (<+) [||] real_ty ty then
-                value, store
-            else
-                raise (RuntimeError "cast to wrong type")
-        | Let(value, body) ->
-            let value, store = eval_real store value
-
-            match value with
-            | RError -> RError, store
-            | _ -> eval_call body value.to_term |> eval_real store
-
-        | Block b ->
-            let runner (_, store) stmt = eval_real store stmt
-
-            Array.fold runner (RUnit, store) b
 
         | If { cond = cond
                then_ = then_
                else_ = else_ } ->
-            let cond, store = eval_real store cond
-
-            match cond with
-            | RBool b -> eval_real store (if b then then_ else else_)
-            | RError -> RError, store
+            match eval_real cond with
+            | RBool b -> eval_real (if b then then_ else else_)
             | _ -> raise (RuntimeError "guard of conditional not a boolean")
 
-        | TyAbs(bound, t) -> RAll(bound, t), store
+        | TyAbs(bound, t) -> RAll(bound, t)
         | TyApp(t, ty) ->
-            let t, store = eval_real store t
-
-            match t with
-            | RAll(_, t) -> eval_ty_call ty t |> eval_real store
+            match eval_real t with
+            | RAll(_, t) -> eval_ty_call ty t |> eval_real
             | _ -> raise (RuntimeError "cannot apply on a non universal type")
         | Pack p ->
-            let value, store = eval_real store p.value
-
             RSome
                 { ty = p.ty
-                  value = value
-                  as_ = p.as_ },
-            store
+                  value = eval_real p.value
+                  as_ = p.as_ }
         | Unpack(value, body) ->
-            let value, store = eval_real store value
-
-            match value with
-            | RSome p -> eval_call body p.value.to_term |> eval_ty_call p.ty |> eval_real store
-            | RError -> RError, store
+            match eval_real value with
+            | RSome p -> eval_call body p.value.to_term |> eval_ty_call p.ty |> eval_real
             | _ -> raise (RuntimeError "cannot unpack a non existential type")
 
-        | Record r ->
-            let folder (rcd, store) name term =
-                let r, store = eval_real store term
-                Map.add name r rcd, store
-
-            let record, store = Map.fold folder (Map.empty, store) r
-
-            RRecord record, store
+        | Record r -> RRecord(Map.map (fun _ term -> eval_real term) r)
         | Proj(obj, key) ->
-            let obj, store = eval_real store obj
-
-            match obj with
+            match eval_real obj with
             | RRecord t ->
                 match Map.tryFind key t with
-                | Some r -> r, store
+                | Some r -> r
                 | None -> raise (RuntimeError $"key {key} not found in proj")
-            | RError -> RError, store
             | _ -> raise (RuntimeError "proj object not a record")
 
-        | Label l -> RRef l, store
-        | Ref t ->
-            let value, store = (eval_real store t)
-            RRef(Array.length store), add store value
-        | Assign(left, right) ->
-            match eval_real store left with
-            | RRef l, store ->
-                let value, store = eval_real store right
-                Array.set store l value
-                RUnit, store
-            | _ -> raise (RuntimeError "assign to a non ref value")
-        | Deref t ->
-            match eval_real store t with
-            | RRef l, store -> Array.get store l, store
-            | _ -> raise (RuntimeError "derefer to a non ref value")
-
-    eval_real [||] term
+    eval_real term
 
 let print_res term =
     try
         let ty = typeof term
         printfn "Type: %s" ty.to_string
-        let res, store = eval [||] term
-        printfn "Result: %s" (res.to_string store)
+        let res = eval [||] term
+        printfn "Result: %s" res.to_string
     with
     | TypeError t -> printfn "Type error: %s" t
     | RuntimeError t -> printfn "Runtime error: %s" t
 
-let counter_rep = TRecord Map["x", TRef TNat]
+// ∀X ∀T<:X. ∀F<:X. T -> F -> X
+let SBool = TAll(TTop, TAll(TVar 0, TAll(TVar 1, TFn(TVar 1, TFn(TVar 0, TVar 2)))))
+// ∀X ∀T<:X. ∀F<:X. T -> F -> T
+let STrue = TAll(TTop, TAll(TVar 0, TAll(TVar 1, TFn(TVar 1, TFn(TVar 0, TVar 1)))))
+// ∀X ∀T<:X. ∀F<:X. T -> F -> F
+let SFalse =
+    TAll(TTop, TAll(TVar 0, TAll(TVar 1, TFn(TVar 1, TFn(TVar 0, TVar 0)))))
 
-let set_counter =
-    TRecord(
-        Map["get", TFn(TTop, TNat)
-            "set", TFn(TNat, TTop)
-            "inc", TFn(TTop, TTop)]
+// ∀X ∀T<:X. ∀F<:X. λt: X. λf: Y. t
+let tru = TyAbs(TTop, TyAbs(TVar 0, TyAbs(TVar 1, Abs(TVar 1, Abs(TVar 0, Var 1)))))
+// ∀X ∀T<:X. ∀F<:X. λt: X. λf: Y. f
+let fls = TyAbs(TTop, TyAbs(TVar 0, TyAbs(TVar 1, Abs(TVar 1, Abs(TVar 0, Var 0)))))
+// λb: SFalse ∀X ∀T<:X. ∀F<:X. λt: X. λf: Y. b[X][F][T] f t
+let notft =
+    Abs(
+        SFalse,
+        TyAbs(
+            TTop,
+            TyAbs(
+                TVar 0,
+                TyAbs(
+                    TVar 1,
+                    Abs(TVar 1, Abs(TVar 0, App(App(TyApp(TyApp(TyApp(Var 2, TVar 2), TVar 0), TVar 1), Var 0), Var 1)))
+                )
+            )
+        )
     )
 
-let set_counter_class =
-    TyAbs(
-        counter_rep,
-        Abs(
-            TSource(TFn(TVar 0, set_counter)),
-            Abs(
-                TVar 0,
-                Record(
+printfn "%s" (typeof (App(notft, fls))).to_string
+
+let ta = TRecord Map["a", TNat]
+
+let ab =
+    Record(
+        Map["a", Succ Zero
+            "b", Succ Zero]
+    )
+
+let tab = typeof ab
+
+let ac =
+    Record(
+        Map["a", Zero
+            "c", True]
+    )
+
+let tac = typeof ac
+
+print_res (Proj(App(App(TyApp(TyApp(TyApp(tru, ta), tab), tac), ab), ac), "b"))
+
+let counter_adt =
+    Pack
+        { ty = TNat
+          value =
+            Record(
+                Map
+                    [ "new", Succ Zero
+                      "get", Abs(TNat, Var 0)
+                      "inc", Abs(TNat, Succ(Var 0))
+                      "rcADT",
+                      Pack
+                          { ty = TNat
+                            value =
+                              Record(
+                                  Map
+                                      [ "new", Succ Zero
+                                        "get", Abs(TNat, Var 0)
+                                        "inc", Abs(TNat, Succ(Var 0))
+                                        "reset", Abs(TNat, Succ Zero) ]
+                              )
+                            as_ =
+                              TSome(
+                                  TNat,
+                                  TRecord(
+                                      Map
+                                          [ "new", TVar 0
+                                            "get", TFn(TVar 0, TNat)
+                                            "inc", TFn(TVar 0, TVar 0)
+                                            "reset", TFn(TVar 0, TVar 0) ]
+                                  )
+                              ) } ]
+            )
+          as_ =
+            TSome(
+                TTop,
+                TRecord(
                     Map
-                        [ "get", Abs(TTop, Deref(Proj(Var 1, "x")))
-                          "set", Abs(TNat, Assign(Proj(Var 1, "x"), Var 0))
-                          "inc",
-                          Abs(
-                              TTop,
-                              App(
-                                  Proj(App(Deref(Var 2), Var 1), "set"),
-                                  Succ(App(Proj(App(Deref(Var 2), Var 1), "get"), Unit))
+                        [ "new", TNat
+                          "get", TFn(TVar 0, TNat)
+                          "inc", TFn(TVar 0, TVar 0)
+                          "rcADT",
+                          TSome(
+                              TVar 0,
+                              TRecord(
+                                  Map
+                                      [ "new", TVar 0
+                                        "get", TFn(TVar 0, TNat)
+                                        "inc", TFn(TVar 0, TVar 0)
+                                        "reset", TFn(TVar 0, TVar 0) ]
                               )
                           ) ]
                 )
+            ) }
+
+printfn "%s" (typeof (counter_adt)).to_string
+
+print_res (
+    Unpack(
+        counter_adt,
+        Unpack(
+            Proj(Var 0, "rcADT"),
+            App(
+                Proj(Var 1, "get"),
+                App(Proj(Var 1, "inc"), App(Proj(Var 0, "reset"), App(Proj(Var 0, "inc"), Proj(Var 0, "new"))))
             )
         )
     )
-
-let instr_counter_rep =
-    TRecord
-        Map["x", TRef TNat
-            "a", TRef TNat]
-
-
-let instr_counter =
-    TRecord
-        Map["get", TFn(TTop, TNat)
-            "set", TFn(TNat, TTop)
-            "inc", TFn(TTop, TTop)
-            "accesses", TFn(TTop, TNat)]
-
-
-let instr_counter_class =
-    TyAbs(
-        instr_counter_rep,
-        Abs(
-            TSource(TFn(TVar 0, instr_counter)),
-            Abs(
-                TVar 0,
-                Let(
-                    App(TyApp(set_counter_class, TVar 0), Var 1),
-                    Record(
-                        Map
-                            [ "get", Proj(App(Var 0, Var 1), "get")
-                              "set",
-                              Abs(
-                                  TNat,
-                                  Block
-                                      [| Assign(Proj(Var 2, "a"), Succ(Deref(Proj(Var 2, "a"))))
-                                         App(Proj(App(Var 1, Var 2), "set"), Var 0) |]
-                              )
-                              "inc", Proj(App(Var 0, Var 1), "inc")
-                              "accesses", Abs(TTop, Deref(Proj(Var 2, "a"))) ]
-                    )
-                )
-            )
-        )
-    )
-
-let new_instr_counter =
-    Let(
-        Ref(Abs(instr_counter_rep, As(Error, instr_counter))),
-        Let(
-            App(TyApp(instr_counter_class, instr_counter_rep), Var 0),
-            Block
-                [| Assign(Var 1, Var 0)
-                   Abs(
-                       TTop,
-                       Let(
-                           Record
-                               Map["x", Ref(Succ Zero)
-                                   "a", Ref(Zero)],
-                           App(Var 2, Var 0)
-                       )
-                   ) |]
-        )
-    )
-
-printfn "%s" (typeof (new_instr_counter)).to_string
-
-print_res (Let(App(new_instr_counter, Unit), Block [| App(Proj(Var 0, "inc"), Unit); App(Proj(Var 0, "get"), Unit) |]))
+)

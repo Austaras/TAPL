@@ -374,6 +374,7 @@ let eval ctx term =
             let n, store = eval_real store n
 
             match n with
+            | RInt 0 -> RInt 0, store
             | RInt n -> RInt(n - 1), store
             | _ -> raise (RuntimeError "cannot pred a non number")
         | IsZero n ->

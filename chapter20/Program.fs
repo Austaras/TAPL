@@ -163,7 +163,7 @@ let rec typeof ctx term =
         | TRecord t ->
             match Array.tryFind (fun (t, _) -> t = key) t with
             | Some(_, ty) -> ty
-            | None -> raise (TypeError $"ket {key} not found in proj")
+            | None -> raise (TypeError $"key {key} not found in proj")
         | _ -> raise (TypeError "proj object not a record")
 
     | Tag { tag = tag
@@ -397,7 +397,7 @@ let rec eval ctx term =
         | RRecord t ->
             match Array.tryFind (fun (t, _) -> t = key) t with
             | Some(_, r) -> r
-            | None -> raise (RuntimeError $"ket {key} not found in proj")
+            | None -> raise (RuntimeError $"key {key} not found in proj")
         | _ -> raise (RuntimeError "proj object not a record")
     | Case { test = test; branch = branch } ->
         let test = eval ctx test

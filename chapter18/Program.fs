@@ -131,7 +131,7 @@ let rec typeof ctx term =
 
         match t_callee with
         | Bottom -> Bottom
-        | Fn(t_param, body) when t_arg <+ t_param -> if t_arg = Bottom then Bottom else body
+        | Fn(t_param, body) when t_arg <+ t_param -> body
         | Fn(_, _) -> raise (TypeError "parameter type mismatch")
         | _ -> raise (TypeError "callee not a function")
     | If { test = test; cons = cons; alt = alt } ->
@@ -150,7 +150,7 @@ let rec typeof ctx term =
         | TRecord t ->
             match Map.tryFind key t with
             | Some ty -> ty
-            | None -> raise (TypeError $"ket {key} not found in proj")
+            | None -> raise (TypeError $"key {key} not found in proj")
         | _ -> raise (TypeError "proj object not a record")
     | Label _ -> raise (TypeError "label should not be in input")
     | Ref r -> TRef(typeof ctx r)
@@ -311,7 +311,7 @@ let rec eval ctx store term =
         | RRecord t ->
             match Map.tryFind key t with
             | Some r -> r, store
-            | None -> raise (RuntimeError $"ket {key} not found in proj")
+            | None -> raise (RuntimeError $"key {key} not found in proj")
         | _ -> raise (RuntimeError "proj object not a record")
     | Ref r ->
         let r, store = eval ctx store r

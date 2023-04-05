@@ -107,7 +107,7 @@ let rec typeof ctx term =
 
         match t_callee with
         | Bottom -> Bottom
-        | Fn(t_param, body) when t_arg <+ t_param -> if t_arg = Bottom then Bottom else body
+        | Fn(t_param, body) when t_arg <+ t_param -> body
         | Fn(_, _) -> raise (TypeError "parameter type mismatch")
         | _ -> raise (TypeError "callee not a function")
     | If { test = test; cons = cons; alt = alt } ->
@@ -121,7 +121,7 @@ let rec typeof ctx term =
         | TRecord t ->
             match Map.tryFind key t with
             | Some ty -> ty
-            | None -> raise (TypeError $"ket {key} not found in proj")
+            | None -> raise (TypeError $"key {key} not found in proj")
         | _ -> raise (TypeError "proj object not a record")
 
 exception RuntimeError of string
@@ -205,7 +205,7 @@ let rec eval ctx term =
         | RRecord t ->
             match Map.tryFind key t with
             | Some r -> r
-            | None -> raise (RuntimeError $"ket {key} not found in proj")
+            | None -> raise (RuntimeError $"key {key} not found in proj")
         | _ -> raise (RuntimeError "proj object not a record")
 
 let rec to_string res =
@@ -246,7 +246,7 @@ print_res (
     Apply
         { callee =
             Abs
-                { type_ = TRecord(Map["a", Bool])
+                { type_ = TRecord Map["a", Bool]
                   body = Proj(Var 0, "a") }
           arg =
             Record(
