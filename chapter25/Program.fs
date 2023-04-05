@@ -33,7 +33,7 @@ type Type =
             | TUnit -> "Unit"
             | TBool -> "Boolean"
             | TNat -> "Integer"
-            | TFn(arg, ret) -> $"{to_string ctx arg} -> {to_string ctx ret}"
+            | TFn(param, ret) -> $"{to_string ctx param} -> {to_string ctx ret}"
             | TVar i -> get ctx i
             | TAll ty ->
                 let name = gen_name (Array.length ctx)
@@ -58,7 +58,7 @@ let walk_ty onvar c ty =
         | TUnit
         | TBool
         | TNat -> ty
-        | TFn(arg, ret) -> TFn(walk_real c arg, walk_real c ret)
+        | TFn(param, ret) -> TFn(walk_real c param, walk_real c ret)
         | TAll t -> TAll(walk_real (c + 1) t)
         | TSome t -> TSome(walk_real (c + 1) t)
         | TVar t -> onvar t c
@@ -148,9 +148,9 @@ let rec typeof ctx term =
     | Abs(ty, term) ->
         let ty = simplify_ty ty
         TFn(ty, typeof (add ctx ty) term)
-    | Apply(callee, param) ->
+    | Apply(callee, arg) ->
         match typeof ctx callee with
-        | TFn(arg, ret) when arg = typeof ctx param -> ret
+        | TFn(param, ret) when param = typeof ctx arg -> ret
         | TFn _ -> raise (TypeError "arg type mismatch")
         | _ -> raise (TypeError "cannot apply on a non function")
     | Let(value, body) ->
@@ -231,7 +231,7 @@ let walk onvar term =
                   then_ = walk_real c t.then_
                   else_ = walk_real c t.else_ }
         | Var i -> onvar i c
-        | Apply(arg, ret) -> Apply(walk_real c arg, walk_real c ret)
+        | Apply(callee, arg) -> Apply(walk_real c callee, walk_real c arg)
         | Abs(ty, body) -> Abs(ty, walk_real (c + 1) body)
         | Let(value, body) -> Let(walk_real c value, walk_real (c + 1) body)
         | TyAbs t -> TyAbs(walk_real c t)
@@ -280,7 +280,7 @@ let walk_tmty ontype term =
                 { cond = walk_real c t.cond
                   then_ = walk_real c t.then_
                   else_ = walk_real c t.else_ }
-        | Apply(arg, ret) -> Apply(walk_real c arg, walk_real c ret)
+        | Apply(callee, arg) -> Apply(walk_real c callee, walk_real c arg)
         | Abs(ty, body) -> Abs(ontype ty c, walk_real c body)
         | Let(value, body) -> Let(walk_real c value, walk_real c body)
         | TyAbs t -> TyAbs(walk_real (c + 1) t)

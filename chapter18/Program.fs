@@ -17,15 +17,15 @@ type Type =
         | Bottom, _ -> true
         | Fn(arg1, ret1), Fn(arg2, ret2) -> arg2 <+ arg1 && ret1 <+ ret2
         | TRecord rcd1, TRecord rcd2 ->
-            if Map.count rcd1 > Map.count rcd2 then
+            if Map.count rcd1 < Map.count rcd2 then
                 false
             else
                 Map.forall
-                    (fun name ty1 ->
+                    (fun name ty2 ->
                         match Map.tryFind name rcd2 with
-                        | Some ty2 -> ty1 <+ ty2
+                        | Some ty1 -> ty1 <+ ty2
                         | None -> false)
-                    rcd1
+                    rcd2
         | _, _ -> false
 
     // join
@@ -131,7 +131,7 @@ let rec typeof ctx term =
 
         match t_callee with
         | Bottom -> Bottom
-        | Fn(t_param, body) when t_param <+ t_arg -> if t_arg = Bottom then Bottom else body
+        | Fn(t_param, body) when t_arg <+ t_param -> if t_arg = Bottom then Bottom else body
         | Fn(_, _) -> raise (TypeError "parameter type mismatch")
         | _ -> raise (TypeError "callee not a function")
     | If { test = test; cons = cons; alt = alt } ->
