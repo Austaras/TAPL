@@ -41,7 +41,7 @@ type Type =
             | TAll(bound, ty) ->
                 let name = gen_name (Array.length ctx)
 
-                "∀" + name + ": " + to_string ctx bound + ". " + to_string (add ctx name) ty
+                "∀" + name + ": (" + to_string ctx bound + "). " + to_string (add ctx name) ty
             | TSome(bound, ty) ->
                 let name = gen_name (Array.length ctx)
 
@@ -102,34 +102,47 @@ let eval_ty body arg =
 
     shift_ty_above -1 term
 
+exception TypeError of string
+
 // <: but : cannot be used in an operator
 let rec (<+) tyctx a b =
-    match a, b with
-    | a, b when a = b -> true
-    | _, TTop -> true
-    | TBottom, _ -> true
-    | TVar i, b -> (<+) tyctx (get tyctx i) b
-    | a, TVar i -> (<+) tyctx a (get tyctx i)
-    | TFn(arg1, ret1), TFn(arg2, ret2) -> (<+) tyctx arg2 arg1 && (<+) tyctx ret1 ret2
-    | TRecord rcd1, TRecord rcd2 ->
-        if Map.count rcd1 < Map.count rcd2 then
-            false
-        else
-            Map.forall
-                (fun name ty2 ->
-                    match Map.tryFind name rcd1 with
-                    | Some ty1 -> (<+) tyctx ty1 ty2
-                    | None -> false)
-                rcd2
-    // full f-sub
-    | TAll(b1, t1), TAll(b2, t2) -> (<+) tyctx b2 b1 && (<+) tyctx (eval_ty t1 b1) (eval_ty t2 b2)
-    // same as above
-    | TSome(b1, t1), TSome(b2, t2) -> (<+) tyctx b1 b2 && (<+) tyctx (eval_ty t1 b1) (eval_ty t2 b2)
-    | TSource a, TSource b -> (<+) tyctx a b
-    | TSink a, TSink b -> (<+) tyctx b a
-    | TRef a, TSource b -> (<+) tyctx a b
-    | TRef a, TSink b -> (<+) tyctx a b
-    | _, _ -> false
+    let rec subtype tyctx a b count =
+        if count > 3000 then
+            raise (TypeError "detect dead loop in subtype checking")
+
+        match a, b with
+        | a, b when a = b -> true
+        | _, TTop -> true
+        | TBottom, _ -> true
+        | TVar i, b -> subtype tyctx (get tyctx i) b (count + 1)
+        | a, TVar i -> subtype tyctx a (get tyctx i) (count + 1)
+        | TFn(arg1, ret1), TFn(arg2, ret2) -> subtype tyctx arg2 arg1 (count + 1) && subtype tyctx ret1 ret2 (count + 1)
+        | TRecord rcd1, TRecord rcd2 ->
+            if Map.count rcd1 < Map.count rcd2 then
+                false
+            else
+                Map.forall
+                    (fun name ty2 ->
+                        match Map.tryFind name rcd1 with
+                        | Some ty1 -> subtype tyctx ty1 ty2 (count + 1)
+                        | None -> false)
+                    rcd2
+        // full f-sub
+        | TAll(b1, t1), TAll(b2, t2) ->
+            subtype tyctx b2 b1 (count + 1)
+            && subtype tyctx (eval_ty t1 b2) (eval_ty t2 b2) (count + 1)
+
+        // same as above
+        | TSome(b1, t1), TSome(b2, t2) ->
+            subtype tyctx b1 b2 (count + 1)
+            && subtype tyctx (eval_ty t1 b1) (eval_ty t2 b2) (count + 1)
+        | TSource a, TSource b -> subtype tyctx a b (count + 1)
+        | TSink a, TSink b -> subtype tyctx b a (count + 1)
+        | TRef a, TSource b -> subtype tyctx a b (count + 1)
+        | TRef a, TSink b -> subtype tyctx a b (count + 1)
+        | _, _ -> false
+
+    subtype tyctx a b 0
 
 // join
 let rec (<|>) tyctx a b =
@@ -175,8 +188,6 @@ and (<&>) tyctx a b =
 
         TRecord fields
     | _, _ -> TBottom
-
-exception TypeError of string
 
 let rec simplify_ty tyctx ty =
     match ty with
@@ -544,7 +555,7 @@ let eval ctx term =
             | RError -> RError, store
             | _ -> raise (RuntimeError "callee not a function")
 
-        | As(value, ty) -> 
+        | As(value, ty) ->
             let value, store = eval_real store value
 
             let real_ty = typeof value.to_term
@@ -741,3 +752,12 @@ let new_instr_counter =
 printfn "%s" (typeof (new_instr_counter)).to_string
 
 print_res (Let(App(new_instr_counter, Unit), Block [| App(Proj(Var 0, "inc"), Unit); App(Proj(Var 0, "get"), Unit) |]))
+
+let not tvar = TAll(tvar, TVar 0)
+let t = TAll(TTop, not (TAll(TVar 0, not (TVar 0))))
+let other = TAll(t, not (TVar 0))
+
+try
+    printfn "%b" ((<+) [||] t other)
+with TypeError s ->
+    printfn "Error: %s" s

@@ -114,7 +114,7 @@ let rec (<+) tyctx a b =
                     | None -> false)
                 rcd2
     // full f-sub
-    | TAll(b1, t1), TAll(b2, t2) -> (<+) tyctx b2 b1 && (<+) tyctx (eval_ty t1 b1) (eval_ty t2 b2)
+    | TAll(b1, t1), TAll(b2, t2) -> (<+) tyctx b2 b1 && (<+) tyctx (eval_ty t1 b2) (eval_ty t2 b2)
     // same as above
     | TSome(b1, t1), TSome(b2, t2) -> (<+) tyctx b1 b2 && (<+) tyctx (eval_ty t1 b1) (eval_ty t2 b2)
     | _, _ -> false
