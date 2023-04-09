@@ -129,13 +129,25 @@ let rec (<+) tyctx a b =
                     rcd2
         // full f-sub
         | TAll(b1, t1), TAll(b2, t2) ->
-            subtype tyctx b2 b1 (count + 1)
-            && subtype tyctx (eval_ty t1 b2) (eval_ty t2 b2) (count + 1)
+            let bound = subtype tyctx b2 b1 (count + 1)
+
+            if bound then
+                let tyctx = add tyctx b2
+                let tyctx = Array.map (shift_ty_above 1) tyctx
+                subtype tyctx t1 t2 (count + 1)
+            else
+                false
 
         // same as above
         | TSome(b1, t1), TSome(b2, t2) ->
-            subtype tyctx b1 b2 (count + 1)
-            && subtype tyctx (eval_ty t1 b1) (eval_ty t2 b2) (count + 1)
+            let bound = subtype tyctx b1 b2 (count + 1)
+
+            if bound then
+                let tyctx = add tyctx b1
+                let tyctx = Array.map (shift_ty_above 1) tyctx
+                subtype tyctx t1 t2 (count + 1)
+            else
+                false
         | TSource a, TSource b -> subtype tyctx a b (count + 1)
         | TSink a, TSink b -> subtype tyctx b a (count + 1)
         | TRef a, TSource b -> subtype tyctx a b (count + 1)
@@ -199,7 +211,11 @@ let rec simplify_ty tyctx ty =
             else
                 raise (TypeError "cannot satisfy bound")
         | t1 -> t1
-    | TVar i -> simplify_ty tyctx (get tyctx i)
+    | _ -> ty
+
+let rec resolve tyctx ty =
+    match ty with
+    | TVar i -> resolve tyctx (get tyctx i)
     | _ -> ty
 
 let wrong_scope =
@@ -261,7 +277,7 @@ let rec typeof_real ctx tyctx term =
         let t_callee = typeof_real ctx tyctx callee
         let t_arg = typeof_real ctx tyctx arg
 
-        match t_callee with
+        match resolve tyctx (t_callee) with
         | TBottom -> TBottom
         | TFn(t_param, body) when (<+) tyctx t_arg t_param -> if t_arg = TBottom then TBottom else body
         | TFn _ -> raise (TypeError "parameter type mismatch")
@@ -294,7 +310,7 @@ let rec typeof_real ctx tyctx term =
         let tyctx = Array.map (shift_ty_above 1) tyctx
         TAll(bound, typeof_real ctx tyctx t)
     | TyApp(term, ty) ->
-        match typeof_real ctx tyctx term with
+        match resolve tyctx (typeof_real ctx tyctx term) with
         | TAll(bound, tbody) ->
             if (<+) tyctx ty bound then
                 eval_ty tbody ty
@@ -304,7 +320,7 @@ let rec typeof_real ctx tyctx term =
     | Pack p ->
         let real_ty = typeof_real ctx tyctx p.value
 
-        match p.as_ with
+        match resolve tyctx (p.as_) with
         | TSome(bound, exp) ->
             if not ((<+) tyctx p.ty bound) then
                 raise (TypeError "cannot satisfy bound")
@@ -315,7 +331,7 @@ let rec typeof_real ctx tyctx term =
         | _ -> raise (TypeError "can only pack to existiential type")
 
     | Unpack(value, body) ->
-        match typeof_real ctx tyctx value with
+        match resolve tyctx (typeof_real ctx tyctx value) with
         | TSome(bound, t) ->
             let ctx = Array.map (shift_ty_above 1) ctx
             let ctx = add ctx t
@@ -326,7 +342,7 @@ let rec typeof_real ctx tyctx term =
         | _ -> raise (TypeError "must unpack an existential type")
     | Record r -> TRecord(Map.map (fun _ ty -> typeof_real ctx tyctx ty) r)
     | Proj(obj, key) ->
-        match typeof_real ctx tyctx obj with
+        match resolve tyctx (typeof_real ctx tyctx obj) with
         | TRecord t ->
             match Map.tryFind key t with
             | Some ty -> ty
@@ -335,7 +351,7 @@ let rec typeof_real ctx tyctx term =
 
     | Ref t -> TRef(typeof_real ctx tyctx t)
     | Assign(left, right) ->
-        match typeof_real ctx tyctx left with
+        match resolve tyctx (typeof_real ctx tyctx left) with
         | TRef tl
         | TSink tl ->
             let tr = typeof_real ctx tyctx right
@@ -346,7 +362,7 @@ let rec typeof_real ctx tyctx term =
                 raise (TypeError "assign to wrong type of cell")
         | _ -> raise (TypeError "assign to a non ref type")
     | Deref t ->
-        match typeof_real ctx tyctx t with
+        match resolve tyctx (typeof_real ctx tyctx t) with
         | TRef t
         | TSource t -> t
         | _ -> raise (TypeError "dereference to a non ref type")
@@ -755,9 +771,8 @@ print_res (Let(App(new_instr_counter, Unit), Block [| App(Proj(Var 0, "inc"), Un
 
 let not tvar = TAll(tvar, TVar 0)
 let t = TAll(TTop, not (TAll(TVar 0, not (TVar 0))))
-let other = TAll(t, not (TVar 0))
 
 try
-    printfn "%b" ((<+) [||] t other)
+    printfn "%b" ((<+) [|t|] (TVar 0) (TAll(TVar 0, not (TVar 0))))
 with TypeError s ->
     printfn "Error: %s" s
